@@ -1,0 +1,251 @@
+%include "/home/mc95150/pwd.sas";
+libname mylib3 "/opt/sasdata/prod/Data/USA/MonthlyReports/working";
+libname vig "/opt/sasdata/dev/SASCode/vignesh";
+libname templib "/opt/saswork/temp/lisa/monthly/USA";
+libname lookup "/opt/sasdata/prod/Data/USA";
+
+PROC SQL;
+connect to redshift(dsn=gdap user=&reduser. pwd="&redpass.");
+CREATE TABLE DMSITE as
+select * from connection to redshift(
+select *
+from RMDW_Tables.DMSITE where ctry_iso_nu=840
+
+);
+QUIT;
+
+/*data vig.Promo_exit_QBR_Q3;*/
+/*set vig.Promo_exit_QBR_Q3;*/
+/*promo_fl=1;*/
+/*if month=7 then period="2024-07";*/
+/*if month=8 then period="2024-08";*/
+/*if month=9 then period="2024-09";*/
+/*run;*/
+/**/
+
+data vig.PORTAL_SUBMISSION_DATA_QBR3;
+set PORTAL_SUBMISSION_DATA_QBR3;
+if abs(sub_price-curr_price) ge 0.01 then sub_fl=1;
+if month(effective_date)=7 then thisyear="2024-07";
+if month(effective_date)=8 then thisyear="2024-08";
+if month(effective_date)=9 then thisyear="2024-09";
+if classification="NPR" and promo_calendar_type in (1,2) and sub_fl=1 then Promo_fl1=1;
+if classification="NPR" and promo_calendar_type in (0) and sub_fl=1 then rec_fl=1;
+if classification="NPR" and promo_calendar_type in (3) then rec_fl=0;
+if classification="Non Rec Bucket" then rec_fl=0;
+if classification="Promo Unwind" and sub_fl=1 then promo_fl1=1;
+if classification="Rec Bucket" and sub_fl=1 then rec_fl=1;
+run;
+
+
+
+data mnthyRptBase;
+set mylib3.mnthyRptBase;
+where thisyear in ("2024-07","2024-08","2024-09");
+run;
+
+proc sql;
+create table mnthyRptBase1 as 
+select a.*,b.rec_fl,b.promo_fl1,d.promo_fl,c.advt_coop_na
+from mnthyRptBase a 
+left join vig.PORTAL_SUBMISSION_DATA_QBR3 b 
+on a.mcd_gbal_lcat_id_nu=b.gbl_store_id and a.sld_menu_itm_id=b.Item_code and upper(a.channel)=upper(b.channel) and a.thisyear=b.thisyear
+left join DMSITE c on a.mcd_gbal_lcat_id_nu=c.mcd_gbal_lcat_id_nu
+left join vig.Promo_exit_QBR_Q3 d on c.advt_coop_na=d.COOP and a.sld_menu_itm_id=d.sld_menu_itm_id and upper(a.channel)="INSTORE" and a.thisyear=d.period;
+quit;
+
+data mnthyRptBase1_;
+set mnthyRptBase1;
+if promo_fl=1 or promo_fl1=1 then promo_fl_final=1;
+if promo_fl_final=1 then rec_fl=0;
+run;
+
+data mnthyRptBase2;
+set mnthyRptBase1_;
+if rec_fl=1 then do;
+avg_Menu_price_CY_rec=avg_Menu_price_Cy;
+avg_Menu_price_CY_non_rec=avg_Menu_price_lY;
+avg_Menu_price_CY_promo=avg_Menu_price_lY;
+
+avg_Menu_price_CY_rec_M=avg_Menu_price_Cy;
+avg_Menu_price_CY_non_rec_M=avg_Menu_price_Pre_CY;
+avg_Menu_price_CY_promo_M=avg_Menu_price_Pre_CY;
+end;
+else if promo_fl_final=1 then do;
+avg_Menu_price_CY_rec=avg_Menu_price_lY;
+avg_Menu_price_CY_non_rec=avg_Menu_price_lY;
+avg_Menu_price_CY_promo=avg_Menu_price_Cy;
+
+avg_Menu_price_CY_rec_M=avg_Menu_price_Pre_CY;
+avg_Menu_price_CY_non_rec_M=avg_Menu_price_Pre_CY;
+avg_Menu_price_CY_promo_M=avg_Menu_price_Cy;
+end;
+else do;
+avg_Menu_price_CY_rec=avg_Menu_price_lY;
+avg_Menu_price_CY_non_rec=avg_Menu_price_CY;
+avg_Menu_price_CY_promo=avg_Menu_price_lY;
+
+avg_Menu_price_CY_rec_M=avg_Menu_price_Pre_CY;
+avg_Menu_price_CY_non_rec_M=avg_Menu_price_CY;
+avg_Menu_price_CY_promo_M=avg_Menu_price_Pre_CY;
+end;
+        if avg_Menu_price_CY_rec ne . then MENU_rec_Flag=1;
+        else MENU_rec_Flag=0;
+        if avg_Menu_price_CY_non_rec ne . then MENU_non_rec_Flag=1;
+        else MENU_non_rec_Flag=0;
+		if avg_Menu_price_CY_promo ne . then MENU_promo_Flag=1;
+        else MENU_promo_Flag=0;
+
+		if avg_Menu_price_CY_rec_M ne . then MENU_rec_Flag_M=1;
+        else MENU_rec_Flag_M=0;
+        if avg_Menu_price_CY_non_rec_M ne . then MENU_non_rec_Flag_M=1;
+        else MENU_non_rec_Flag_M=0;
+		if avg_Menu_price_CY_promo_M ne . then MENU_promo_Flag_M=1;
+        else MENU_promo_Flag_M=0;
+		
+run;
+
+proc sql;
+create table vig.wkly_pmix_store_1b as
+select  a.mcd_gbal_lcat_id_nu, a.thisyear,
+        sum(avg_Menu_price_LY*units_ly)/sum(units_ly*MENU_LY_Flag) as Wtd_MenuAvg_price_LY,
+        sum(avg_Menu_price_CY*units_ly)/sum(units_ly*MENU_CY_Flag) as Wtd_MenuAvg_price_CY,	
+        sum(avg_Menu_price_DEC_LY*units_ly)/sum(units_ly*MENU_Dec_LY_Flag) as Wtd_MenuAvg_price_DEC_LY,
+        sum(avg_Menu_price_Pre_CY*units_ly)/sum(units_ly*MENU_Pre_CY_Flag) as Wtd_MenuAvg_price_Pre_CY,		
+        sum(avg_Menu_price_cy_rec*units_ly)/sum(units_ly*MENU_rec_Flag) as Wtd_MenuAvg_price_CY_rec,
+        sum(avg_Menu_price_CY_non_rec*units_ly)/sum(units_ly*MENU_non_rec_Flag) as Wtd_MenuAvg_price_CY_non_rec,
+		sum(avg_Menu_price_CY_promo*units_ly)/sum(units_ly*MENU_promo_Flag) as Wtd_MenuAvg_price_CY_promo,
+		sum(avg_Menu_price_cy_rec_M*units_ly)/sum(units_ly*MENU_rec_Flag_M) as Wtd_MenuAvg_price_CY_rec_m,
+        sum(avg_Menu_price_CY_non_rec_M*units_ly)/sum(units_ly*MENU_non_rec_Flag_M) as Wtd_MenuAvg_price_CY_non_rec_M,
+		sum(avg_Menu_price_CY_promo_M*units_ly)/sum(units_ly*MENU_promo_Flag_M) as Wtd_MenuAvg_price_CY_promo_M
+from mnthyRptBase2 a
+where removeflag=0 
+group by  a.mcd_gbal_lcat_id_nu, a.thisyear;
+quit;
+
+
+data vig.wkly_pmix_store_2;
+	set vig.wkly_pmix_store_1b;
+	IF MCD_GBAL_LCAT_ID_NU  IN (195500306612) THEN DELETE;
+	if Wtd_MenuAvg_price_LY ne 0 then do;
+		price_taken_total=(Wtd_MenuAvg_price_CY-Wtd_MenuAvg_price_LY)/Wtd_MenuAvg_price_LY;
+		/* mom */
+    	price_taken_total_rec_mom=(Wtd_MenuAvg_price_CY_rec_m-Wtd_MenuAvg_price_Pre_CY)/Wtd_MenuAvg_price_LY;
+		price_taken_total_non_rec_mom=(Wtd_MenuAvg_price_CY_non_rec_m-Wtd_MenuAvg_price_pre_CY)/Wtd_MenuAvg_price_LY;
+		price_taken_total_promo_mom=(Wtd_MenuAvg_price_CY_promo_m-Wtd_MenuAvg_price_pre_cy)/Wtd_MenuAvg_price_LY;
+		/* yoy */
+		price_taken_total_rec=(Wtd_MenuAvg_price_CY_rec-Wtd_MenuAvg_price_LY)/Wtd_MenuAvg_price_LY;
+		price_taken_total_non_rec=(Wtd_MenuAvg_price_CY_non_rec-Wtd_MenuAvg_price_LY)/Wtd_MenuAvg_price_LY;
+		price_taken_total_promo=(Wtd_MenuAvg_price_CY_promo-Wtd_MenuAvg_price_LY)/Wtd_MenuAvg_price_LY;
+	END;
+
+	if Wtd_MenuAvg_price_Pre_CY ne 0 then do;
+		MenuCurrentRoundChange3=(Wtd_MenuAvg_price_CY-Wtd_MenuAvg_price_Pre_CY)/(Wtd_MenuAvg_price_Pre_CY);
+	end;
+	if Wtd_MenuAvg_price_Pre_CY eq . and Wtd_MenuAvg_price_LY not in (0 .) and Wtd_MenuAvg_price_DEC_LY not in (0.) then do;
+		MenuCurrentRoundChange=0;
+		MenuCurrentRoundCarry=1;
+		if abs(round(Wtd_MenuAvg_price_CY - Wtd_MenuAvg_price_LY,.01)) >= .01 then do;
+				MenuCurrentRoundCarryLY=(Wtd_MenuAvg_price_DEC_LY-Wtd_MenuAvg_price_LY)/(Wtd_MenuAvg_price_CY-Wtd_MenuAvg_price_LY);
+				MenuCurrentRoundCarryCY=1-sum(MenuCurrentRoundChange,MenuCurrentRoundCarryLY);
+		end;
+		else if abs(round(Wtd_MenuAvg_price_LY - Wtd_MenuAvg_price_DEC_LY,.01)) >= .01 then do;
+				MenuCurrentRoundCarryLY=1;
+				MenuCurrentRoundCarryCY=0;
+		end;
+		else do;
+				MenuCurrentRoundCarryLY=1;
+				MenuCurrentRoundCarryCY=0;
+		end;
+    end;
+    /*** if it was available last year, current year, and current year pre ***/
+    else if (Wtd_MenuAvg_price_CY ne . and  Wtd_MenuAvg_price_LY ne . and Wtd_MenuAvg_price_Pre_CY ne . and Wtd_MenuAvg_price_DEC_LY ne .) then do;
+            if abs(round(Wtd_MenuAvg_price_CY - Wtd_MenuAvg_price_LY,.01)) >= .01 then do;
+                    MenuCurrentRoundChange=(Wtd_MenuAvg_price_CY-Wtd_MenuAvg_price_Pre_CY)/(Wtd_MenuAvg_price_CY-Wtd_MenuAvg_price_LY);
+                    MenuCurrentRoundCarry=1-MenuCurrentRoundChange;
+                    MenuCurrentRoundCarryLY=(Wtd_MenuAvg_price_DEC_LY-Wtd_MenuAvg_price_LY)/(Wtd_MenuAvg_price_CY-Wtd_MenuAvg_price_LY);
+                    MenuCurrentRoundCarryCY=1-sum(MenuCurrentRoundChange,MenuCurrentRoundCarryLY);
+            end;
+            else if abs(round(Wtd_MenuAvg_price_CY - Wtd_MenuAvg_price_Pre_CY,.01)) >= .01 then do;
+                    MenuCurrentRoundChange=1;
+                    MenuCurrentRoundCarry=0;
+                    MenuCurrentRoundCarryLY=0;
+                    MenuCurrentRoundCarryCY=0;
+            end;
+            else do;
+                    MenuCurrentRoundChange=0;
+                    MenuCurrentRoundCarry=0;
+                    MenuCurrentRoundCarryLY=0;
+                    MenuCurrentRoundCarryCY=0;
+            end;
+    end;
+    else do;
+            MenuCurrentRoundChange=0;
+            MenuCurrentRoundCarry=0;
+            MenuCurrentRoundCarryLY=0;
+            MenuCurrentRoundCarryCY=0;
+    end;
+
+			
+MenuCurrentRoundChange2=MenuCurrentRoundChange*price_taken_total;
+MenuCurrentRoundCarryLY2=MenuCurrentRoundCarryLY*price_taken_total;
+MenuCurrentRoundCarryCY2=MenuCurrentRoundCarryCY*price_taken_total;
+
+run;
+
+proc sql;
+create table gstcnts2 as 
+select  mcd_gbal_lcat_id_nu,
+thisyear,
+sum(guestcount_Cy) as guestcount_Cy,
+sum(guestcount_LY) as guestcount_ly 
+from templib.gstcnts2 where thisyear in ("2024-07","2024-08","2024-09")
+group by 1,2;
+quit;
+
+proc sql;
+create table final as 
+select "USA" as Market,a.*,
+b.coop2,
+case when b.rest_owsh_typ_id=1 then "MCOPCO    " 
+ when b.rest_owsh_typ_id=2 then "FRANCHISEE"
+end as Ownership,
+c.GuestCount_LY,
+c.GuestCount_CY 
+from  vig.wkly_pmix_store_2 a 
+left join lookup.regions  b 
+on a.mcd_gbal_lcat_id_nu=b.mcd_gbal_lcat_id_nu
+left join gstcnts2 c on a.mcd_gbal_lcat_id_nu=c.mcd_gbal_lcat_id_nu and a.thisyear=c.thisyear;
+quit;
+
+data vig.final1;
+set final;
+if  GuestCount_LY not in (.,0) then do;
+gc_change_pc=(GuestCount_CY/GuestCount_LY)-1;
+end;
+run;
+
+
+%Macro loop(level);
+
+proc sql;
+create table vig.PT_QBR3_&level. as 
+select &level.,thisyear,
+avg(gc_change_pc) as gc_change_pc,
+avg(price_taken_total) as Price_taken,
+avg(price_taken_total_rec) as Price_taken_rec,
+avg(price_taken_total_non_rec) as Price_taken_non_rec,
+avg(price_taken_total_promo) as Price_taken_promo,
+avg(price_taken_total_rec_MOM) as price_taken_total_rec_MOM,
+avg(price_taken_total_non_rec_mom) as price_taken_total_non_rec_mom,
+avg(price_taken_total_promo_mom) as price_taken_total_promo_mom,
+avg(MenuCurrentRoundChange2) as MenuCurrentRoundChange2,
+avg(MenuCurrentRoundCarryLY2) as MenuCurrentRoundCarryLY2,
+avg(MenuCurrentRoundCarryCY2) as MenuCurrentRoundCarryCY2
+from vig.final1
+group by &level,thisyear;
+quit;
+%mend;
+
+%loop(Ownership);
+%loop(coop2);

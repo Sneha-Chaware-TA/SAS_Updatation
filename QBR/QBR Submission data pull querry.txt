@@ -1,0 +1,39 @@
+/****** Delivery submission data *****/
+
+
+select distinct c.recomd_name,
+b.gbl_store_id,
+b.effective_date,
+b.recomd_id,
+a.item_code,
+others_price as delivery_sub_price,
+d.curr_mcd_price as delivery_curr_Price ,
+d.recomd_mcd_Price as delivery_recomd_Price
+from mcd_us_prod.rfm_xml_audit_log_detail a left join mcd_us_prod.rfm_xml_audit_log_mstr b
+on a.audit_log_id=b.id
+left join mcd_us_prod.recommendations_mstr c 
+on b.recomd_id=c.id 
+left join mcd_us_prod.recommendation_store_mcditem_mapping d
+on b.recomd_id=d.recomd_id and b.store_id=d.store_id and a.item_code=d.item_Code 
+where month(effective_date) in (7,8,9) and year(effective_date)=2024 and abs(d.curr_mcd_price-d.recomd_mcd_Price) >= 0.01 
+and d.is_default=1
+
+
+/****** Instore submission data *****/
+
+select distinct c.recomd_name,
+b.gbl_store_id,
+b.effective_date,
+b.recomd_id,
+a.item_code,
+eatin_price as instore_sub_price,
+d.curr_price as instore_curr_Price,
+d.recomd_Price as instore_recomd_Price
+from mcd_us_prod.rfm_xml_audit_log_detail a left join mcd_us_prod.rfm_xml_audit_log_mstr b
+on a.audit_log_id=b.id
+left join mcd_us_prod.recommendations_mstr c 
+on b.recomd_id=c.id 
+left join mcd_us_prod.recommendation_store_item_mapping d
+on b.recomd_id=d.recomd_id and b.store_id=d.store_id and a.item_code=d.item_code 
+where month(effective_date) in (7,8,9) and year(effective_date)=2024 and abs(d.curr_mcd_price-d.recomd_mcd_Price) >= 0.01 
+and d.is_default=1
