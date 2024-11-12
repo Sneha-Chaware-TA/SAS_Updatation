@@ -1,0 +1,64 @@
+libname prod "//opt/sasdata/prod/Data/USA/MonthlyReports/working";
+
+data GMOT;
+set prod.mnthyrptbase;
+where thisyear="2024-10";
+run;
+
+proc sql;
+create table KMOT as select
+mcd_gbal_lcat_id_nu,
+store_nu as 'Store id'n,
+channel,
+thisyear,
+sum(cost_ly) as 'Cost Ly'n,
+sum(cost_CY) as  'Cost CY'n,
+sum(sales_ly) as 'Sales LY'n,
+sum(sales_cy) as 'Sales CY'n,
+sum(gm_ly) as 'GM LY'n,
+sum(gm_cy) as 'GM CY'n,
+sum(MixMrgImpact) as 'Cross Impact'n,
+sum(PurePriceImpact) as PurePriceImpact,
+sum(FPCostChangeImpact) as FPCostChangeImpact,
+sum(MenuChangeMrgImpact) as MEnuChangeMrgImpact,
+sum(GuestCountMrgImpact) as GuestCountMrgImpact
+from GMOT
+where thisyear in ('2024-10')
+group by 1,2,3,4;
+quit;
+
+
+proc export data=KMOT
+outfile="/opt/sasdata/dev/SASCode/vignesh/KMOT.csv"
+dbms=csv;
+run;
+
+
+proc sql;
+        create table priceTaken as
+        select mcd_gbal_lcat_id_nu, channel,
+                thisyear, 
+				sum(sales_ly) as 'Sales LY'n,
+sum(sales_cy) as 'Sales CY'n,
+sum(gm_ly) as 'GM LY'n,
+sum(gm_cy) as 'GM CY'n,
+                sum(avg_Menu_price_LY*units_ly) as Numerator_MB_LY,
+                sum(avg_Menu_price_DEC_LY*units_ly) as Numerator_MB_DEC_LY,
+                sum(avg_Menu_price_PRE_CY*units_ly) as Numerator_MB_PRE_CY,
+                sum(avg_Menu_price_CY*units_ly) as Numerator_MB_CY,
+
+                sum(units_ly*MENU_LY_Flag) as denominator_MB_LY,
+                sum(units_ly*MENU_DEC_LY_Flag) as denominator_MB_DEC_LY,
+                sum(units_ly*MENU_PRE_CY_Flag) as denominator_MB_PRE_CY,
+                sum(units_ly*MENU_CY_Flag) as denominator_MB_CY
+        from GMOT
+        where removeflag=0
+        group by 1,2,3
+                ;
+quit;
+
+
+proc export data=priceTaken
+outfile="/opt/sasdata/dev/SASCode/vignesh/price_taken.csv"
+dbms=csv;
+run;
