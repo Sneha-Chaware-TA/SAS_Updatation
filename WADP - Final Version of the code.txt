@@ -1,0 +1,123 @@
+
+libname pm "/opt/sasdata/prod/Data/USA/pmixXchannel/daily";
+libname prod "/opt/sasdata/prod/Data/USA/MonthlyReports/working";
+libname local "/opt/sasdata/dev/SASCode/vignesh";
+%include "/home/mc95150/pwd.sas";
+
+/**** PMIX PULL ******/
+
+data local.base_data;
+set pm.dly_pmix_2849 - pm.dly_pmix_2862; /* <-------- Update the week ID *******/
+where delivery ne "" and
+cal_dt >= "01AUG2024"d and cal_dt <= "31OCT2024"d; /*<------ update the dates *****/
+run;
+
+
+/*** SNAPSHOT PULL ****/
+
+
+PROC SQL;
+connect to redshift(dsn=gdap user=&reduser. pwd="&redpass.");
+CREATE TABLE PriceSnap1 as
+select * from connection to redshift(
+select *
+from RMDW_Tables.LCAT_MENU_ITM_PRC_SNAP a
+where a.terr_cd=840
+);
+QUIT;
+
+
+/***** PROCESSING *****/
+
+proc sql;
+create table local.base_data1 as
+select a.cal_dt,a.gbal_id,b.zone,b.coop2,b.ownership,a.sld_menu_itm_id,a.alacarte_units as units,c.exclude,d.AVM_ID
+from local.base_data a
+left join prod.regions b
+on a.gbal_id=b.mcd_gbal_lcat_id_nu
+left join prod.iteminfo c
+on a.sld_menu_itm_id=c.sld_menu_itm_id
+left join Avm_mapping_nov d /*<------ import the new AVM mapping file & Update the AVM mapping every month ********/
+on a.sld_menu_itm_id=d.EVM_ID
+where c.exclude ne 1 
+;
+quit;
+
+
+proc sql;
+create table local.base_data2 as
+select a.*,b.frnt_cter_itm_prc_am,b.oth_itm_prc_am,c.frnt_cter_itm_prc_am as AVM_instore_price,c.oth_itm_prc_am as AVM_Delivery_price
+from local.base_data1 a
+left join PriceSnap1 b
+on a.gbal_id=b.MCD_GBAL_LCAT_ID_NU and a.sld_MENU_ITM_ID=B.SLD_MENU_ITM_ID AND A.CAL_DT >= B.PRC_EFF_DT AND (A.CAL_DT <= B.PRC_END_dT OR  B.PRC_END_DT =.)
+left join PriceSnap1 C
+on a.gbal_id=C.MCD_GBAL_LCAT_ID_NU and a.avm_id=C.SLD_MENU_ITM_ID AND A.CAL_DT >= C.PRC_EFF_DT AND (A.CAL_DT <= C.PRC_END_dT OR c.PRC_END_DT =.)
+;
+QUIT;
+
+
+data BASE_DATA3;
+        set local.BASE_DATA2;
+                Market="USA";
+                year=year(cal_dt);
+                month=month(cal_dt);
+        INSTORE_PRICE=SUM(frnt_cter_itm_prc_am,AVM_instore_price);
+        DELIVERY_PRICE=SUM(oth_itm_prc_am,AVM_Delivery_price);
+
+        if units in (0 .) then removeflag=1;
+        else if INSTORE_PRICE in (0 .) then removeflag=1;
+        else if DELIVERY_PRICE in (0 .) then removeflag=1;
+        else removeflag=0;
+
+        if INSTORE_PRICE ne . then FC_Flag=1;
+        else FC_Flag=0;
+        if DELIVERY_PRICE ne . then DL_Flag=1;
+        else DL_Flag=0;
+run;
+
+%macro loop(level);
+
+proc sql;
+ create table local.pmixsnap_det as
+         select &level. as level length=150 ,gbal_id,year,month
+                 ,sum(INSTORE_PRICE*units)/sum(units*FC_Flag) as wgt_instore_prc_am
+                 ,sum(DELIVERY_PRICE*units)/sum(units*DL_Flag) as wgt_delivery_prc_am
+         from BASE_DATA3
+         where removeflag=0
+         group by 1,2,3,4;
+ quit;
+
+data final1;
+set local.pmixsnap_det;
+WADP=(wgt_delivery_prc_am/wgt_instore_prc_am)-1;
+run;
+
+
+
+proc sql;
+create table final as 
+select  level ,year,month,
+count(gbal_id) As tot_store_count,
+count(case when WADP > .3 then gbal_id end) as store_cnt_gt_30pc,
+
+avg(WADP) As WADP
+from final1 
+group by 1,2,3;
+quit;
+
+
+
+ proc append data=final base=final_WADP_1;
+ run;
+
+ %mend;
+
+ proc datasets lib=work;
+ delete final_WADP_1;
+ run;
+
+
+
+ %loop(coop2);
+ %loop(Zone);
+ %loop(ownership);
